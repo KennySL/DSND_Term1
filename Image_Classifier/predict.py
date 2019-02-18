@@ -14,10 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import argparse
+import train as tn
 
-# load the label mapping file. this file turn encoded categories to actual names.
-with open('cat_to_name.json', 'r') as f:
-    cat_to_name = json.load(f)
 
 # define location of data
 data_dir = 'flowers'
@@ -25,50 +23,29 @@ train_dir = data_dir + '/train'
 valid_dir = data_dir + '/valid'
 test_dir = data_dir + '/test'
     
-    
-    
-    
+
 # define functions
 
 ## 1. define the load checkpoint function. this function will be used to rebuild the model. 
-def load_checkpoint(filepath):
+def load_checkpoint(filepath, dev):
     
-    vgg = models.vgg16(pretrained=True)
+    checkpoint = torch.load(filepath)
+    model = checkpoint['model_arch']
+    learn_rate = checkpoint['learn_rate']
+    model.class_to_idx = checkpoint['class_to_index']
+    model.load_state_dict(checkpoint['state_dict'])
     
     #keep the pretrained weights unchanged
-    for param in vgg.parameters():
+    for param in model.parameters():
         param.reuires_grad = False
 
-
-    #define a new untrained network as classifer.
-    clf = nn.Sequential(nn.Linear(25088, 4096),
-                        nn.ReLU("inplace"),
-                        nn.Dropout(0.5),
-                        nn.Linear(4096, 512), 
-                        nn.ReLU("inplace"),
-                        nn.Dropout(0.5),
-                        nn.Linear(512, 102), 
-                        nn.LogSoftmax(dim = 1))
-
-    #replace the original classifier with the new defined classifier.
-    vgg.classifier = clf
-    
-    #Define device, optimizer, and criterion
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    criterion = nn.NLLLoss()
-    optimizer = optim.Adam(vgg.classifier.parameters(), lr = 0.001)
-
-    #pass model parameters and other tensors to GPU memory if available, otherwise to cpu.
-    vgg.to(device);
-        
-    checkpoint = torch.load(filepath)
-    vgg.class_to_idx = checkpoint['class_to_index']
+    device , criterion, optimizer = tn.define_device_crit_Optim(model, dev, learn_rate)
     optimizer.state_dict = checkpoint['optimizer_state']
-    vgg.load_state_dict(checkpoint['state_dict'])
     
-    return vgg
-
-
+    #pass model parameters and other tensors to GPU memory if available, otherwise to cpu.
+    model.to(device);
+    
+    return model
 
 ## 2. Define the process_image function. 
 def process_image(image):
@@ -140,10 +117,10 @@ def imshow(image, ax=None, title=None):
     return ax
 
 ## define the predict function. 
-def predict(image_path, model, topk=5):
+def predict(image_path, model, topk, dev):
     ''' Predict the class (or classes) of an image using a trained deep learning model.
     '''
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(dev)
     model.eval()
     inputs = torch.tensor(np.expand_dims(process_image(image_path), axis = 0), dtype= torch.float)
     
@@ -168,29 +145,34 @@ def predict(image_path, model, topk=5):
     #return inputs
     return top_p, top_cls  
 
-
-
 # Main program
-def main(image_path, checkpoint):
-    vgg = load_checkpoint(checkpoint)
-    top_p, top_cls = predict(image_path, vgg)
+def main(image_path, checkpoint, cat_file, dev, top_k):
+    model = load_checkpoint(checkpoint, dev)
+    top_p, top_cls = predict(image_path, model, top_k, dev)
     
     cat_name = []
+    cat_to_name = tn.load_cat_file(cat_file)
     
     for i in top_cls:
         cat_name.append(cat_to_name[i])
-       
+    
     return top_p, cat_name
 
 # Argument parser
+
+#test input: python predict.py 'flowers/test/43/image_02412.jpg' 'checkpoint.pth' 'cat_to_name.json' 'cuda' 5
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
     parser.add_argument('image_path', default = 'flowers/test/43/image_02412.jpg')
     parser.add_argument('checkpoint', default = 'checkpoint.pth')
+    parser.add_argument('cat_file', default = 'cat_to_name.json')
+    parser.add_argument('dev', default = 'cuda')
+    parser.add_argument('top_k', type = int, default = 5)
+    
     input_args = parser.parse_args()
     
-    top_p, cat_name = main(input_args.image_path, input_args.checkpoint)
+    top_p, cat_name = main(input_args.image_path, input_args.checkpoint, input_args.cat_file, input_args.dev, input_args.top_k)
     
     print(f'\nimage: {input_args.image_path} ')
     print(f'\nFlower Category                            Probability\n')
